@@ -1,10 +1,10 @@
 import io
 import re
 import cv2
-import easyocr
 import fitz  # PyMuPDF for PDF uploads
 import numpy as np
 from PIL import Image, ImageDraw
+from rapidocr_onnxruntime import RapidOCR
 import streamlit as st
 
 st.set_page_config(page_title="Pavement Cafe Plan Generator", layout="wide")
@@ -13,10 +13,10 @@ st.title("Pavement Cafe Dimensioned Polygon Generator")
 
 @st.cache_resource
 def load_ocr():
-  return easyocr.Reader(["en"], gpu=False)
+  return RapidOCR()
 
 
-reader = load_ocr()
+ocr = load_ocr()
 
 
 def draw_dimension_arrow(draw, p1, p2, text, offset=25, color="black"):
@@ -63,7 +63,7 @@ if uploaded_file:
     np_arr = np.asarray(bytearray(file_bytes), dtype=np.uint8)
     img_cv = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-  # Resize large images so free Streamlit Cloud (1GB RAM) never runs out of memory
+  # Resize large images so free hosting never runs out of memory
   h, w = img_cv.shape[:2]
   if w > 1200:
     img_cv = cv2.resize(img_cv, (1200, int(h * (1200 / w))))
@@ -73,20 +73,22 @@ if uploaded_file:
     st.subheader("Uploaded Plan")
     st.image(img_cv, channels="BGR", use_container_width=True)
 
-  # --- AUTOMATIC EXTRACTION (OpenCV + EasyOCR) ---
+  # --- AUTOMATIC EXTRACTION (OpenCV + RapidOCR) ---
   with st.spinner("Reading dimensions and detecting boundary polygons..."):
-    ocr_results = reader.readtext(img_cv)
+    ocr_results, _ = ocr(img_cv)
     dimensions = []
-    for bbox, text, _ in ocr_results:
-      match = re.search(r"(\d+\.?\d*)", text)
-      if match:
-        val = float(match.group(1))
-        if val > 100:  # Convert mm (e.g. 4500) to meters (4.5)
-          val /= 1000.0
-        if 0.2 <= val <= 50.0:  # Filter out unlikely numbers
-          cx = int((bbox[0][0] + bbox[2][0]) / 2)
-          cy = int((bbox[0][1] + bbox[2][1]) / 2)
-          dimensions.append({"val": val, "x": cx, "y": cy})
+    if ocr_results:
+      for item in ocr_results:
+        bbox, text, _ = item
+        match = re.search(r"(\d+\.?\d*)", str(text))
+        if match:
+          val = float(match.group(1))
+          if val > 100:  # Convert mm (e.g. 4500) to meters (4.5)
+            val /= 1000.0
+          if 0.2 <= val <= 50.0:
+            cx = int((bbox[0][0] + bbox[2][0]) / 2)
+            cy = int((bbox[0][1] + bbox[2][1]) / 2)
+            dimensions.append({"val": val, "x": cx, "y": cy})
 
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
